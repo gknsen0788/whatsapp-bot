@@ -2,7 +2,7 @@
  * VillaRez WhatsApp Web Baileys Listener Gateway
  * Connects to WhatsApp Web, generates web-based native SVG QR code UI, listens to group messages,
  * and posts incoming date-locking messages to PHP webhook.
- * Includes Anti-Ban & Connection Protection (Browser Fingerprinting, Passive Mode & Reconnection Backoff).
+ * Includes Anti-Ban & Connection Protection (Browser Fingerprinting, Passive Mode, Reconnection Backoff & 24/7 Self-Ping KeepAlive).
  */
 
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
@@ -10,8 +10,9 @@ import qrcodeTerminal from 'qrcode-terminal';
 import QRCode from 'qrcode';
 import axios from 'axios';
 import http from 'http';
+import fs from 'fs';
 
-const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost/wp_rez/api/webhook.php';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://takvimtakip.com.tr/wp/api/webhook.php';
 const PORT = process.env.PORT || 3000;
 
 let currentQR = null;
@@ -20,7 +21,7 @@ let reconnectAttempts = 0;
 
 // Web Server for Native SVG QR Code Display & Health Check
 http.createServer(async (req, res) => {
-  if (req.url === '/' || req.url === '/qr') {
+  if (req.url === '/' || req.url === '/qr' || req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     if (connectionStatus === 'open') {
       res.end(`
@@ -39,10 +40,10 @@ http.createServer(async (req, res) => {
         </head>
         <body>
           <div class="card">
-            <div class="badge">✅ WhatsApp Bağlantısı Güvenli & Aktif</div>
-            <h2>WhatsApp Bot 7/24 Kesintisiz Çalışıyor!</h2>
+            <div class="badge">✅ WhatsApp Bağlantısı Güvenli & 7/24 Aktif</div>
+            <h2>WhatsApp Bot Kesintisiz Çalışıyor!</h2>
             <p style="color: #94a3b8;">Gruplardan gelen rezervasyon kapatma mesajları otomatik olarak PHP panelinize aktarılmaktadır.</p>
-            <div class="info">🛡️ Anti-Ban Koruması: Pasif Okuyucu Modu | Official Chrome Desktop Fingerprint</div>
+            <div class="info">🛡️ Anti-Ban Koruması | 24/7 Keep-Alive Auto-Ping Active</div>
           </div>
         </body>
         </html>
@@ -103,6 +104,16 @@ http.createServer(async (req, res) => {
   console.log(`🌐 Web QR server running on port ${PORT}`);
 });
 
+// Self-Ping Keep-Alive interval every 5 minutes to prevent Render free tier sleeping
+setInterval(async () => {
+  try {
+    const pingTarget = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    await axios.get(pingTarget);
+  } catch (e) {
+    // Keep-alive silent catch
+  }
+}, 3 * 60 * 1000);
+
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
@@ -116,7 +127,7 @@ async function connectToWhatsApp() {
     markOnlineOnConnect: false,
     syncFullHistory: false,
     // 3. Keep-alive heartbeat & timeout settings
-    keepAliveIntervalMs: 30000,
+    keepAliveIntervalMs: 25000,
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
   });
@@ -136,13 +147,25 @@ async function connectToWhatsApp() {
     if (connection === 'close') {
       connectionStatus = 'close';
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const isRestartRequired = statusCode === DisconnectReason.restartRequired;
 
-      reconnectAttempts++;
-      const delay = Math.min(reconnectAttempts * 3000, 30000); // Exponential backoff max 30s
-      console.log(`WhatsApp connection closed (Status ${statusCode}). Reconnecting in ${delay / 1000}s...`);
+      console.log(`WhatsApp connection closed (Status ${statusCode})...`);
 
-      if (shouldReconnect) {
+      if (isLoggedOut) {
+        console.log('⚠️ Session logged out. Clearing auth_info_baileys to generate new QR...');
+        currentQR = null;
+        try {
+          fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+        } catch (err) {}
+        setTimeout(() => connectToWhatsApp(), 2000);
+      } else if (isRestartRequired) {
+        console.log('🔄 Reconnecting immediately (Restart Required)...');
+        connectToWhatsApp();
+      } else {
+        reconnectAttempts++;
+        const delay = Math.min(reconnectAttempts * 2000, 20000);
+        console.log(`Reconnecting in ${delay / 1000}s (Attempt ${reconnectAttempts})...`);
         setTimeout(() => connectToWhatsApp(), delay);
       }
     } else if (connection === 'open') {
