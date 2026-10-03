@@ -1,12 +1,13 @@
 /**
  * VillaRez WhatsApp Web Baileys Listener Gateway
- * Connects to WhatsApp Web, generates web-based QR code UI, listens to group messages,
+ * Connects to WhatsApp Web, generates web-based native SVG QR code UI, listens to group messages,
  * and posts incoming date-locking messages to PHP webhook.
  * Supports Cloud Hosting (Render/Railway), Quoted/Reply messages & stanzaId lookup!
  */
 
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
+import qrcodeTerminal from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import axios from 'axios';
 import http from 'http';
 
@@ -16,8 +17,8 @@ const PORT = process.env.PORT || 3000;
 let currentQR = null;
 let connectionStatus = 'connecting';
 
-// Web Server for HD QR Code Display & Health Check
-http.createServer((req, res) => {
+// Web Server for Native SVG QR Code Display & Health Check
+http.createServer(async (req, res) => {
   if (req.url === '/' || req.url === '/qr') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     if (connectionStatus === 'open') {
@@ -44,33 +45,36 @@ http.createServer((req, res) => {
         </html>
       `);
     } else if (currentQR) {
-      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(currentQR)}`;
-      res.end(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>WhatsApp Bot Karekod Bağlantısı</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 30px; background: #0f172a; color: white; }
-            .card { background: #1e293b; padding: 30px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.3); border: 1px solid #334155; max-width: 400px; }
-            img { margin: 20px 0; border: 6px solid #25D366; border-radius: 12px; background: white; padding: 10px; }
-            .btn { background: #25D366; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; text-decoration: none; }
-          </style>
-          <script>setTimeout(() => location.reload(), 12000);</script>
-        </head>
-        <body>
-          <div class="card">
-            <h2>📱 WhatsApp Bağlantısı</h2>
-            <p style="color: #94a3b8; font-size: 14px;">WhatsApp ➔ Bağlı Cihazlar ➔ Cihaz Bağla kısmından okutun:</p>
-            <img src="${qrImageUrl}" alt="WhatsApp QR Code" width="300" height="300" />
-            <br/>
-            <p><small style="color: #64748b;">Sayfa 12 saniyede bir otomatik yenilenir.</small></p>
-          </div>
-        </body>
-        </html>
-      `);
+      try {
+        const qrSvg = await QRCode.toString(currentQR, { type: 'svg', margin: 2 });
+        res.end(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>WhatsApp Bot Karekod Bağlantısı</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 30px; background: #0f172a; color: white; }
+              .card { background: #1e293b; padding: 30px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.3); border: 1px solid #334155; max-width: 420px; }
+              .qr-box { background: white; padding: 15px; border-radius: 12px; margin: 20px auto; display: inline-block; }
+              .qr-box svg { width: 300px; height: 300px; }
+            </style>
+            <script>setTimeout(() => location.reload(), 10000);</script>
+          </head>
+          <body>
+            <div class="card">
+              <h2>📱 WhatsApp Bağlantısı</h2>
+              <p style="color: #94a3b8; font-size: 14px;">WhatsApp ➔ Bağlı Cihazlar ➔ Cihaz Bağla kısmından okutun:</p>
+              <div class="qr-box">${qrSvg}</div>
+              <p><small style="color: #64748b;">Sayfa 10 saniyede bir otomatik yenilenir.</small></p>
+            </div>
+          </body>
+          </html>
+        `);
+      } catch (err) {
+        res.end('<h1>Karekod çizilirken hata oluştu: ' + err.message + '</h1>');
+      }
     } else {
       res.end(`
         <!DOCTYPE html>
@@ -113,7 +117,7 @@ async function connectToWhatsApp() {
       console.log('\n==================================================');
       console.log('  NEW QR CODE GENERATED - VISIT WEB PAGE TO SCAN');
       console.log('==================================================\n');
-      qrcode.generate(qr, { small: true });
+      qrcodeTerminal.generate(qr, { small: true });
     }
 
     if (connection === 'close') {
