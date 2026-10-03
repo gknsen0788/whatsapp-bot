@@ -1,0 +1,15 @@
+{
+  "name": "wp-rez-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "VillaRez WhatsApp Web Listener Bot for Group Message Decoding",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "axios": "^1.7.7",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
