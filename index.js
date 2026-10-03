@@ -2,7 +2,7 @@
  * VillaRez WhatsApp Web Baileys Listener Gateway
  * Connects to WhatsApp Web, generates web-based native SVG QR code UI, listens to group messages,
  * and posts incoming date-locking messages to PHP webhook.
- * Supports Cloud Hosting (Render/Railway), Quoted/Reply messages & stanzaId lookup!
+ * Includes Anti-Ban & Connection Protection (Browser Fingerprinting, Passive Mode & Reconnection Backoff).
  */
 
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 let currentQR = null;
 let connectionStatus = 'connecting';
+let reconnectAttempts = 0;
 
 // Web Server for Native SVG QR Code Display & Health Check
 http.createServer(async (req, res) => {
@@ -33,13 +34,15 @@ http.createServer(async (req, res) => {
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 40px; background: #0f172a; color: white; }
             .card { background: #1e293b; padding: 40px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.3); border: 1px solid #334155; }
             .badge { background: #10b981; color: white; padding: 8px 16px; border-radius: 20px; font-weight: bold; display: inline-block; margin-bottom: 20px; }
+            .info { color: #94a3b8; font-size: 14px; margin-top: 15px; }
           </style>
         </head>
         <body>
           <div class="card">
-            <div class="badge">✅ WhatsApp Bağlantısı Aktif</div>
+            <div class="badge">✅ WhatsApp Bağlantısı Güvenli & Aktif</div>
             <h2>WhatsApp Bot 7/24 Kesintisiz Çalışıyor!</h2>
             <p style="color: #94a3b8;">Gruplardan gelen rezervasyon kapatma mesajları otomatik olarak PHP panelinize aktarılmaktadır.</p>
+            <div class="info">🛡️ Anti-Ban Koruması: Pasif Okuyucu Modu | Official Chrome Desktop Fingerprint</div>
           </div>
         </body>
         </html>
@@ -103,9 +106,19 @@ http.createServer(async (req, res) => {
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
+  // Anti-Ban & Safe Connection Configuration
   const sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
+    // 1. Official Browser Fingerprint (Appears as standard Desktop Chrome on Mac/Ubuntu)
+    browser: ['Ubuntu', 'Chrome', '124.0.0.0'],
+    // 2. Mark socket as Passive Receiver (does not force online state or send status updates)
+    markOnlineOnConnect: false,
+    syncFullHistory: false,
+    // 3. Keep-alive heartbeat & timeout settings
+    keepAliveIntervalMs: 30000,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
   });
 
   sock.ev.on('connection.update', (update) => {
@@ -124,15 +137,20 @@ async function connectToWhatsApp() {
       connectionStatus = 'close';
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log('WhatsApp connection closed. Reconnecting:', shouldReconnect);
+
+      reconnectAttempts++;
+      const delay = Math.min(reconnectAttempts * 3000, 30000); // Exponential backoff max 30s
+      console.log(`WhatsApp connection closed (Status ${statusCode}). Reconnecting in ${delay / 1000}s...`);
+
       if (shouldReconnect) {
-        connectToWhatsApp();
+        setTimeout(() => connectToWhatsApp(), delay);
       }
     } else if (connection === 'open') {
       currentQR = null;
       connectionStatus = 'open';
-      console.log('✅ WhatsApp Web connected successfully!');
-      console.log('Listening to group date-locking & cancellation reply messages...');
+      reconnectAttempts = 0;
+      console.log('✅ WhatsApp Web connected safely with Official Chrome Fingerprint!');
+      console.log('Listening passively to group date-locking & cancellation messages...');
     }
   });
 
