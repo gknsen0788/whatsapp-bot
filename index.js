@@ -6,9 +6,9 @@
  * Features:
  * - Anti-Crash & Auto-Recovery (Process-level error handlers, Single-instance socket lifecycle)
  * - Safe QR Pairing (Clean restart delay on status 515 pairing event)
- * - Anti-Ban & Safe Connection (Official Chrome Fingerprint, Passive Receiver, Silent Logger)
- * - Interactive Web Dashboard with Real-Time Heartbeat & Last Message Monitor
- * - One-Click Web Reconnect (/reconnect) & Session Reset (/reset-session)
+ * - Smart Webhook URL Resolution (Auto-corrects localhost / template URLs to live takvimtakip.com.tr)
+ * - Interactive Web Dashboard with Real-Time Webhook Response & Diagnostic Monitor
+ * - Live Webhook Test Button (/test-webhook) & Reconnect (/reconnect)
  * - External Keep-Alive Health Endpoint (/health, /ping) for UptimeRobot / Cron
  */
 
@@ -30,7 +30,12 @@ import http from 'http';
 import fs from 'fs';
 import pino from 'pino';
 
-const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://takvimtakip.com.tr/wp/api/webhook.php';
+// Smart Webhook URL resolution: If env has template or localhost, fallback to real live cPanel endpoint
+let resolvedWebhookUrl = process.env.WEBHOOK_URL || 'https://takvimtakip.com.tr/wp/api/webhook.php';
+if (!resolvedWebhookUrl || resolvedWebhookUrl.includes('localhost') || resolvedWebhookUrl.includes('siteniz.com') || resolvedWebhookUrl.includes('127.0.0.1')) {
+  resolvedWebhookUrl = 'https://takvimtakip.com.tr/wp/api/webhook.php';
+}
+const WEBHOOK_URL = resolvedWebhookUrl;
 const PORT = process.env.PORT || 3000;
 
 let currentSock = null;
@@ -39,6 +44,12 @@ let connectionStatus = 'connecting'; // 'connecting', 'open', 'close', 'reconnec
 let connectedAt = null;
 let lastActivityAt = null;
 let lastMessageInfo = null;
+let lastWebhookStatus = {
+  status: 'BEKLENİYOR',
+  code: null,
+  message: 'Henüz bir mesaj iletilmedi.',
+  time: null
+};
 let totalProcessedMessages = 0;
 let reconnectAttempts = 0;
 let isReconnecting = false;
@@ -106,7 +117,7 @@ function resetSession() {
   setTimeout(() => connectToWhatsApp(), 2000);
 }
 
-// Web Server for Dashboard, QR Code, Health & Reconnect Actions
+// Web Server for Dashboard, QR Code, Health, Diagnostics & Reconnect Actions
 http.createServer(async (req, res) => {
   try {
     const url = req.url || '/';
@@ -117,6 +128,8 @@ http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({
         status: connectionStatus,
+        webhookUrl: WEBHOOK_URL,
+        lastWebhookStatus,
         connectedAt: formatTrTime(connectedAt),
         lastActivityAt: formatTrTime(lastActivityAt),
         totalProcessedMessages,
@@ -125,7 +138,74 @@ http.createServer(async (req, res) => {
       }, null, 2));
     }
 
-    // 2. One-Click Manual Reconnect route
+    // 2. Direct Webhook Test endpoint
+    if (url === '/test-webhook') {
+      try {
+        const testPayload = {
+          groupId: 'group_test1_ext',
+          groupName: '💫 Villa test1 💫',
+          senderId: '905555555555@s.whatsapp.net',
+          senderName: 'Sistem Test Gönderimi',
+          messageId: 'TEST_' + Date.now(),
+          messageText: '10-15 Kasım satıldı',
+          quotedText: '',
+          quotedStanzaId: null,
+          timestamp: Math.floor(Date.now() / 1000)
+        };
+
+        const testRes = await axios.post(WEBHOOK_URL, testPayload, { timeout: 12000 });
+        lastWebhookStatus = {
+          status: 'BAŞARILI (200 OK)',
+          code: testRes.status,
+          message: JSON.stringify(testRes.data),
+          time: new Date()
+        };
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(`
+          <!DOCTYPE html>
+          <html lang="tr">
+          <head>
+            <meta charset="utf-8">
+            <title>Webhook Test Sonucu</title>
+            <style>body { font-family: sans-serif; background: #0f172a; color: white; padding: 40px; text-align: center; } .box { background: #1e293b; padding: 25px; border-radius: 16px; display: inline-block; max-width: 600px; text-align: left; } pre { background: #0f172a; padding: 15px; border-radius: 8px; color: #34d399; overflow-x: auto; }</style>
+          </head>
+          <body>
+            <div class="box">
+              <h2 style="color: #34d399;">✅ Webhook Testi Başarılı! (HTTP ${testRes.status})</h2>
+              <p>Hedef: <code>${WEBHOOK_URL}</code></p>
+              <pre>${JSON.stringify(testRes.data, null, 2)}</pre>
+              <p><a href="/" style="color: #38bdf8;">◀ Ana Sayfaya Dön</a></p>
+            </div>
+          </body>
+          </html>
+        `);
+      } catch (tErr) {
+        lastWebhookStatus = {
+          status: 'HATA',
+          code: tErr.response?.status || 'BAĞLANTI_HATASI',
+          message: tErr.message,
+          time: new Date()
+        };
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(`
+          <!DOCTYPE html>
+          <html lang="tr">
+          <head><meta charset="utf-8"><title>Webhook Test Hatası</title><style>body { font-family: sans-serif; background: #0f172a; color: white; padding: 40px; text-align: center; } .box { background: #1e293b; padding: 25px; border-radius: 16px; display: inline-block; max-width: 600px; text-align: left; border: 1px solid #ef4444; } pre { background: #0f172a; padding: 15px; border-radius: 8px; color: #f87171; overflow-x: auto; }</style></head>
+          <body>
+            <div class="box">
+              <h2 style="color: #f87171;">❌ Webhook İletim Hatası!</h2>
+              <p>Hedef Adres: <code>${WEBHOOK_URL}</code></p>
+              <pre>${tErr.message}</pre>
+              <p><a href="/" style="color: #38bdf8;">◀ Ana Sayfaya Dön</a></p>
+            </div>
+          </body>
+          </html>
+        `);
+      }
+    }
+
+    // 3. One-Click Manual Reconnect route
     if (url === '/reconnect') {
       forceReconnect('Web UI Button Click');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -159,7 +239,7 @@ http.createServer(async (req, res) => {
       `);
     }
 
-    // 3. One-Click Session Reset route (Forces new QR generation)
+    // 4. One-Click Session Reset route (Forces new QR generation)
     if (url === '/reset-session') {
       resetSession();
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -190,12 +270,15 @@ http.createServer(async (req, res) => {
       `);
     }
 
-    // 4. Main Dashboard UI (/ and /qr)
+    // 5. Main Dashboard UI (/ and /qr)
     if (url === '/' || url === '/qr') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
       // A) If Connected
       if (connectionStatus === 'open') {
+        const isWebhookSuccess = lastWebhookStatus.status.includes('BAŞARILI') || lastWebhookStatus.code === 200;
+        const webhookColor = isWebhookSuccess ? '#34d399' : (lastWebhookStatus.status === 'BEKLENİYOR' ? '#94a3b8' : '#f87171');
+
         return res.end(`
           <!DOCTYPE html>
           <html lang="tr">
@@ -206,21 +289,24 @@ http.createServer(async (req, res) => {
             <style>
               * { box-sizing: border-box; }
               body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-              .container { max-width: 580px; width: 100%; background: #1e293b; border-radius: 24px; padding: 32px 28px; border: 1px solid #334155; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); text-align: center; }
+              .container { max-width: 600px; width: 100%; background: #1e293b; border-radius: 24px; padding: 32px 28px; border: 1px solid #334155; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); text-align: center; }
               .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 18px; border-radius: 9999px; font-size: 13px; font-weight: 700; margin-bottom: 20px; background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
               h1 { font-size: 22px; font-weight: 800; margin: 0 0 8px; color: #ffffff; }
               p.sub { font-size: 13px; color: #94a3b8; margin: 0 0 24px; line-height: 1.5; }
               .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; text-align: left; }
               .stat-card { background: #0f172a; padding: 14px 16px; border-radius: 14px; border: 1px solid #334155; }
               .stat-label { font-size: 11px; text-transform: uppercase; font-weight: 700; color: #64748b; letter-spacing: 0.5px; margin-bottom: 4px; }
-              .stat-val { font-size: 14px; font-weight: 700; color: #f1f5f9; }
-              .msg-box { background: #0f172a; padding: 16px; border-radius: 16px; border: 1px solid #334155; margin-bottom: 24px; text-align: left; }
+              .stat-val { font-size: 13px; font-weight: 700; color: #f1f5f9; }
+              .msg-box { background: #0f172a; padding: 16px; border-radius: 16px; border: 1px solid #334155; margin-bottom: 16px; text-align: left; }
               .msg-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; font-weight: 700; color: #38bdf8; }
               .msg-text { font-size: 13px; color: #cbd5e1; font-style: italic; word-break: break-word; }
+              .webhook-box { background: #0f172a; padding: 14px 16px; border-radius: 14px; border: 1px solid #334155; margin-bottom: 24px; text-align: left; font-size: 12px; }
               .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-              .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 700; text-decoration: none; cursor: pointer; border: none; transition: all 0.2s; }
+              .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 18px; border-radius: 12px; font-size: 12px; font-weight: 700; text-decoration: none; cursor: pointer; border: none; transition: all 0.2s; }
               .btn-primary { background: #0284c7; color: white; }
               .btn-primary:hover { background: #0369a1; transform: translateY(-1px); }
+              .btn-success { background: #059669; color: white; }
+              .btn-success:hover { background: #047857; }
               .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
               .btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
               .footer-note { margin-top: 20px; font-size: 11px; color: #64748b; }
@@ -243,12 +329,12 @@ http.createServer(async (req, res) => {
                   <div class="stat-val" style="color: #38bdf8;">${formatTrTime(lastActivityAt || new Date())}</div>
                 </div>
                 <div class="stat-card">
-                  <div class="stat-label">İletilen Mesaj Sayısı</div>
+                  <div class="stat-label">Alınan Mesaj Sayısı</div>
                   <div class="stat-val" style="color: #34d399;">${totalProcessedMessages} Adet</div>
                 </div>
                 <div class="stat-card">
                   <div class="stat-label">Korumalar</div>
-                  <div class="stat-val" style="font-size: 12px;">Crash Guard & Watchdog Aktif</div>
+                  <div class="stat-val" style="font-size: 11px;">Crash Guard & Auto-Ping Aktif</div>
                 </div>
               </div>
 
@@ -262,17 +348,33 @@ http.createServer(async (req, res) => {
                 </div>
               </div>
 
+              <div class="webhook-box">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="font-weight: 700; color: #94a3b8;">🌐 PHP Webhook Hedefi:</span>
+                  <span style="font-weight: 700; color: ${webhookColor};">${lastWebhookStatus.status}</span>
+                </div>
+                <div style="font-family: monospace; font-size: 11px; color: #38bdf8; word-break: break-all; margin-bottom: 6px;">
+                  ${WEBHOOK_URL}
+                </div>
+                <div style="color: #64748b; font-size: 11px;">
+                  Son Yanıt: ${lastWebhookStatus.message ? (lastWebhookStatus.message.length > 80 ? lastWebhookStatus.message.substring(0, 80) + '...' : lastWebhookStatus.message) : '-'}
+                </div>
+              </div>
+
               <div class="btn-group">
+                <a href="/test-webhook" class="btn btn-success" target="_blank">
+                  🧪 Webhook Test Gönder
+                </a>
                 <a href="/reconnect" class="btn btn-primary" onclick="return confirm('WhatsApp soket bağlantısı taze olarak yeniden başlatılsın mı?');">
-                  🔄 Bağlantıyı Yenile / Soketi Tazele
+                  🔄 Bağlantıyı Yenile
                 </a>
                 <a href="/reset-session" class="btn btn-danger" onclick="return confirm('DİKKAT: Mevcut oturum sıfırlanacak ve YENİ KAREKOD üretilecektir. Onaylıyor musunuz?');">
-                  🔑 Oturumu Sıfırla (Yeni QR)
+                  🔑 Oturumu Sıfırla
                 </a>
               </div>
 
               <div class="footer-note">
-                Telefonda son görülme donarsa <strong>"Bağlantıyı Yenile"</strong> butonuna basmanız yeterlidir.
+                Sistem 7/24 kesintisiz çalışmaktadır.
               </div>
             </div>
           </body>
@@ -534,10 +636,26 @@ async function connectToWhatsApp() {
                     timestamp: msg.messageTimestamp,
                   };
 
-                  const response = await axios.post(WEBHOOK_URL, payload, { timeout: 15000 });
-                  console.log('➡️ Webhook Response:', response.data);
-                } catch (err) {
-                  console.error('❌ Webhook posting error:', err.message);
+                  try {
+                    const response = await axios.post(WEBHOOK_URL, payload, { timeout: 15000 });
+                    lastWebhookStatus = {
+                      status: 'BAŞARILI (HTTP ' + response.status + ')',
+                      code: response.status,
+                      message: typeof response.data === 'object' ? JSON.stringify(response.data) : String(response.data),
+                      time: new Date()
+                    };
+                    console.log('➡️ Webhook Response:', response.data);
+                  } catch (postErr) {
+                    lastWebhookStatus = {
+                      status: 'İLETİM HATASI',
+                      code: postErr.response?.status || 'AĞ_HATASI',
+                      message: postErr.message,
+                      time: new Date()
+                    };
+                    console.error('❌ Webhook posting error:', postErr.message);
+                  }
+                } catch (procErr) {
+                  console.error('❌ Message processing error:', procErr.message);
                 }
               }
             }
