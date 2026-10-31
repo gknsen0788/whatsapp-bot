@@ -368,9 +368,6 @@ http.createServer(async (req, res) => {
 
       // A) If Connected
       if (connectionStatus === 'open') {
-        const isWebhookSuccess = lastWebhookStatus.status.includes('BAŞARILI') || lastWebhookStatus.code === 200;
-        const webhookColor = isWebhookSuccess ? '#059669' : (lastWebhookStatus.status === 'BEKLENİYOR' ? t.subText : '#dc2626');
-
         return res.end(`
           <!DOCTYPE html>
           <html lang="tr">
@@ -389,10 +386,9 @@ http.createServer(async (req, res) => {
               .stat-card { background: ${t.boxBg}; padding: 14px 16px; border-radius: 14px; border: 1px solid ${t.boxBorder}; }
               .stat-label { font-size: 11px; text-transform: uppercase; font-weight: 700; color: ${t.statLabel}; letter-spacing: 0.5px; margin-bottom: 4px; }
               .stat-val { font-size: 13px; font-weight: 700; color: ${t.statVal}; }
-              .msg-box { background: ${t.boxBg}; padding: 16px; border-radius: 16px; border: 1px solid ${t.boxBorder}; margin-bottom: 16px; text-align: left; }
+              .msg-box { background: ${t.boxBg}; padding: 16px; border-radius: 16px; border: 1px solid ${t.boxBorder}; margin-bottom: 24px; text-align: left; }
               .msg-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; font-weight: 700; color: ${t.msgHeader}; }
               .msg-text { font-size: 13px; color: ${t.msgBody}; font-style: italic; word-break: break-word; }
-              .webhook-box { background: ${t.boxBg}; padding: 14px 16px; border-radius: 14px; border: 1px solid ${t.boxBorder}; margin-bottom: 24px; text-align: left; font-size: 12px; }
               .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
               .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 18px; border-radius: 12px; font-size: 12px; font-weight: 700; text-decoration: none; cursor: pointer; border: none; transition: all 0.2s; }
               .btn-primary { background: ${t.btnPrimaryBg}; color: white; }
@@ -420,14 +416,6 @@ http.createServer(async (req, res) => {
                   <div class="stat-label">Son Canlılık Kontrolü</div>
                   <div class="stat-val" style="color: ${t.webhookUrlColor};">${formatTrTime(lastActivityAt || new Date())}</div>
                 </div>
-                <div class="stat-card">
-                  <div class="stat-label">Alınan Mesaj Sayısı</div>
-                  <div class="stat-val" style="color: #059669;">${totalProcessedMessages} Adet</div>
-                </div>
-                <div class="stat-card">
-                  <div class="stat-label">Korumalar</div>
-                  <div class="stat-val" style="font-size: 11px;">Crash Guard & Auto-Ping Aktif</div>
-                </div>
               </div>
 
               <div class="msg-box">
@@ -437,19 +425,6 @@ http.createServer(async (req, res) => {
                 </div>
                 <div class="msg-text">
                   ${lastMessageInfo ? `<strong>[${lastMessageInfo.group || 'Grup'}] ${lastMessageInfo.sender || ''}:</strong> "${lastMessageInfo.text || ''}"` : 'Henüz yeni grup mesajı gelmedi (Sistem dinlemede).'}
-                </div>
-              </div>
-
-              <div class="webhook-box">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                  <span style="font-weight: 700; color: ${t.subText};">🌐 PHP Webhook Hedefi:</span>
-                  <span style="font-weight: 700; color: ${webhookColor};">${lastWebhookStatus.status}</span>
-                </div>
-                <div style="font-family: monospace; font-size: 11px; color: ${t.webhookUrlColor}; word-break: break-all; margin-bottom: 6px;">
-                  ${WEBHOOK_URL}
-                </div>
-                <div style="color: ${t.subText}; font-size: 11px;">
-                  Son Yanıt: ${lastWebhookStatus.message ? (lastWebhookStatus.message.length > 80 ? lastWebhookStatus.message.substring(0, 80) + '...' : lastWebhookStatus.message) : '-'}
                 </div>
               </div>
 
