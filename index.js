@@ -28,6 +28,8 @@ import QRCode from 'qrcode';
 import axios from 'axios';
 import https from 'https';
 import http from 'http';
+import net from 'net';
+import dns from 'dns';
 import fs from 'fs';
 import pino from 'pino';
 
@@ -252,6 +254,53 @@ http.createServer(async (req, res) => {
         uptimeSeconds: Math.floor(process.uptime()),
         timestamp: new Date().toISOString()
       }, null, 2));
+    }
+
+    // 1.5 Low-level Network & Firewall Diagnostic endpoint
+    if (pathname === '/net-diag') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      const results = {};
+
+      try {
+        const ipRes = await axios.get('https://api.ipify.org?format=json', { timeout: 4000 });
+        results.outboundIp = ipRes.data?.ip;
+      } catch (e) {
+        results.outboundIpError = e.message;
+      }
+
+      try {
+        results.dnsResolvedIps = await dns.promises.resolve4('takvimtakip.com.tr');
+      } catch (e) {
+        results.dnsError = e.message;
+      }
+
+      // Helper to test TCP socket connectivity with timeout
+      const testTcp = (host, port, timeout = 4000) => new Promise((resolve) => {
+        const start = Date.now();
+        const socket = new net.Socket();
+        socket.setTimeout(timeout);
+        socket.on('connect', () => {
+          const latency = Date.now() - start;
+          socket.destroy();
+          resolve({ status: 'CONNECTED', latencyMs: latency });
+        });
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve({ status: 'TIMEOUT', error: 'TCP Connection Timed Out (Firewall DROP)' });
+        });
+        socket.on('error', (err) => {
+          socket.destroy();
+          resolve({ status: 'ERROR', error: err.message, code: err.code });
+        });
+        socket.connect(port, host);
+      });
+
+      results.tcpGoogle443 = await testTcp('142.250.187.206', 443, 3000);
+      results.tcpTakvimTakip443 = await testTcp('takvimtakip.com.tr', 443, 4000);
+      results.tcpTakvimTakip80 = await testTcp('takvimtakip.com.tr', 80, 4000);
+      results.tcpDirectIp443 = await testTcp('94.73.151.44', 443, 4000);
+
+      return res.end(JSON.stringify(results, null, 2));
     }
 
     // 2. Direct Webhook Test endpoint
