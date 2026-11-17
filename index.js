@@ -26,6 +26,7 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeys
 import qrcodeTerminal from 'qrcode-terminal';
 import QRCode from 'qrcode';
 import axios from 'axios';
+import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import pino from 'pino';
@@ -37,6 +38,45 @@ if (!resolvedWebhookUrl || resolvedWebhookUrl.includes('localhost') || resolvedW
 }
 const WEBHOOK_URL = resolvedWebhookUrl;
 const PORT = process.env.PORT || 3000;
+
+// High-reliability HTTPS Agent: Forces IPv4 to bypass cloud dual-stack DNS stalls, enables persistent Keep-Alive
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  family: 4,
+  timeout: 45000,
+  rejectUnauthorized: false
+});
+
+// Dedicated webhook client with real browser fingerprint & extended timeout
+const webhookClient = axios.create({
+  timeout: 45000,
+  httpsAgent: httpsAgent,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 VillaRezBot/2.0',
+    'Accept': 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    'Connection': 'keep-alive'
+  }
+});
+
+// Webhook posting engine with automated retry and diagnostic tracking
+async function postToWebhook(payload, maxAttempts = 2) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`➡️ [WEBHOOK] Gönderiliyor (Deneme ${attempt}/${maxAttempts}) Hedef: ${WEBHOOK_URL}...`);
+      const response = await webhookClient.post(WEBHOOK_URL, payload);
+      return { success: true, response };
+    } catch (err) {
+      lastErr = err;
+      console.error(`⚠️ [WEBHOOK HATA] Deneme ${attempt} başarısız (${err.code || 'HATA'}): ${err.message}`);
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+  return { success: false, error: lastErr };
+}
 
 let currentSock = null;
 let currentQR = null;
@@ -216,20 +256,32 @@ http.createServer(async (req, res) => {
 
     // 2. Direct Webhook Test endpoint
     if (pathname === '/test-webhook') {
+      let botIp = 'Bilinmiyor';
       try {
-        const testPayload = {
-          groupId: 'group_test1_ext',
-          groupName: '💫 Villa test1 💫',
-          senderId: '905555555555@s.whatsapp.net',
-          senderName: 'Sistem Test Gönderimi',
-          messageId: 'TEST_' + Date.now(),
-          messageText: '10-15 Kasım satıldı',
-          quotedText: '',
-          quotedStanzaId: null,
-          timestamp: Math.floor(Date.now() / 1000)
-        };
+        const ipRes = await axios.get('https://api.ipify.org?format=json', { timeout: 4000 });
+        botIp = ipRes.data?.ip || 'Bilinmiyor';
+      } catch (e) {
+        // silent
+      }
 
-        const testRes = await axios.post(WEBHOOK_URL, testPayload, { timeout: 12000 });
+      const testPayload = {
+        groupId: 'group_test1_ext',
+        groupName: '💫 Villa test1 💫',
+        senderId: '905555555555@s.whatsapp.net',
+        senderName: 'Sistem Test Gönderimi',
+        messageId: 'TEST_' + Date.now(),
+        messageText: '10-15 Kasım satıldı',
+        quotedText: '',
+        quotedStanzaId: null,
+        timestamp: Math.floor(Date.now() / 1000)
+      };
+
+      const startTime = Date.now();
+      const sendResult = await postToWebhook(testPayload, 2);
+      const durationMs = Date.now() - startTime;
+
+      if (sendResult.success) {
+        const testRes = sendResult.response;
         lastWebhookStatus = {
           status: 'BAŞARILI (200 OK)',
           code: testRes.status,
@@ -249,23 +301,28 @@ http.createServer(async (req, res) => {
               body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: ${t.bg}; color: ${t.text}; padding: 30px 15px; text-align: center; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
               .box { background: ${t.cardBg}; border: 1px solid ${t.cardBorder}; padding: 28px; border-radius: 20px; max-width: 580px; width: 100%; text-align: left; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.06); }
               pre { background: ${t.boxBg}; border: 1px solid ${t.boxBorder}; padding: 14px; border-radius: 12px; color: #059669; font-size: 12px; overflow-x: auto; }
-              .btn-back { display: inline-block; padding: 10px 18px; background: ${t.btnPrimaryBg}; color: white; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13px; margin-top: 10px; }
+              .info-row { font-size: 13px; color: ${t.subText}; margin-bottom: 6px; }
+              .info-row strong { color: ${t.text}; }
+              .btn-back { display: inline-block; padding: 10px 18px; background: ${t.btnPrimaryBg}; color: white; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13px; margin-top: 14px; }
             </style>
           </head>
           <body>
             <div class="box">
               <h2 style="color: #059669; margin-top: 0;">✅ Webhook Testi Başarılı! (HTTP ${testRes.status})</h2>
-              <p style="color: ${t.subText}; font-size: 13px;">Hedef: <code style="color: ${t.webhookUrlColor};">${WEBHOOK_URL}</code></p>
+              <div class="info-row"><strong>Hedef:</strong> <code style="color: ${t.webhookUrlColor};">${WEBHOOK_URL}</code></div>
+              <div class="info-row"><strong>Yanıt Süresi:</strong> ${durationMs} ms</div>
+              <div class="info-row"><strong>Render Bot Dış IP:</strong> <code>${botIp}</code></div>
               <pre>${JSON.stringify(testRes.data, null, 2)}</pre>
               <a href="/?theme=${theme}" class="btn-back">◀ Ana Ekrana Dön</a>
             </div>
           </body>
           </html>
         `);
-      } catch (tErr) {
+      } else {
+        const tErr = sendResult.error;
         lastWebhookStatus = {
           status: 'HATA',
-          code: tErr.response?.status || 'BAĞLANTI_HATASI',
+          code: tErr.response?.status || tErr.code || 'BAĞLANTI_HATASI',
           message: tErr.message,
           time: new Date()
         };
@@ -281,14 +338,21 @@ http.createServer(async (req, res) => {
               body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: ${t.bg}; color: ${t.text}; padding: 30px 15px; text-align: center; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
               .box { background: ${t.cardBg}; border: 1px solid #fecaca; padding: 28px; border-radius: 20px; max-width: 580px; width: 100%; text-align: left; }
               pre { background: ${t.boxBg}; border: 1px solid #fecaca; padding: 14px; border-radius: 12px; color: #dc2626; font-size: 12px; overflow-x: auto; }
-              .btn-back { display: inline-block; padding: 10px 18px; background: ${t.btnPrimaryBg}; color: white; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13px; margin-top: 10px; }
+              .info-row { font-size: 13px; color: ${t.subText}; margin-bottom: 6px; }
+              .info-row strong { color: ${t.text}; }
+              .btn-back { display: inline-block; padding: 10px 18px; background: ${t.btnPrimaryBg}; color: white; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13px; margin-top: 14px; }
             </style>
           </head>
           <body>
             <div class="box">
               <h2 style="color: #dc2626; margin-top: 0;">❌ Webhook İletim Hatası!</h2>
-              <p style="color: ${t.subText}; font-size: 13px;">Hedef Adres: <code>${WEBHOOK_URL}</code></p>
+              <div class="info-row"><strong>Hedef Adres:</strong> <code>${WEBHOOK_URL}</code></div>
+              <div class="info-row"><strong>Render Bot Dış IP:</strong> <code>${botIp}</code> (cPanel güvenlik duvarında engelli olabilir)</div>
+              <div class="info-row"><strong>Geçen Süre:</strong> ${durationMs} ms</div>
               <pre>${tErr.message}</pre>
+              <p style="font-size: 12px; color: #b91c1c; line-height: 1.5;">
+                <strong>İpucu:</strong> Eğer hata "timeout" veya "ECONNREFUSED" ise, hosting sunucunuz (cPanel / Imunify360 / ModSecurity) Render IP adresini (<code>${botIp}</code>) engelliyor olabilir. cPanel &gt; IP Blocker veya Imunify360 &gt; Whitelist alanına bu IP'yi ekleyerek engeli kaldırabilirsiniz.
+              </p>
               <a href="/?theme=${theme}" class="btn-back">◀ Ana Ekrana Dön</a>
             </div>
           </body>
@@ -427,6 +491,17 @@ http.createServer(async (req, res) => {
                   ${lastMessageInfo ? `<strong>[${lastMessageInfo.group || 'Grup'}] ${lastMessageInfo.sender || ''}:</strong> "${lastMessageInfo.text || ''}"` : 'Henüz yeni grup mesajı gelmedi (Sistem dinlemede).'}
                 </div>
               </div>
+
+              ${(lastWebhookStatus.status === 'İLETİM HATASI' || lastWebhookStatus.status === 'HATA') ? `
+              <div style="background: ${isDark ? 'rgba(239, 68, 68, 0.12)' : '#fff1f2'}; border: 1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#fecdd3'}; color: ${isDark ? '#fca5a5' : '#9f1239'}; padding: 12px 16px; border-radius: 14px; font-size: 12px; margin-bottom: 20px; text-align: left; line-height: 1.5;">
+                <div style="font-weight: 800; margin-bottom: 3px; display: flex; align-items: center; gap: 6px;">
+                  <span>⚠️ Webhook İletim Uyarısı:</span>
+                  <span style="font-size: 10px; background: ${isDark ? 'rgba(239, 68, 68, 0.25)' : '#ffe4e6'}; padding: 2px 7px; border-radius: 6px;">${lastWebhookStatus.code || 'AĞ_HATASI'}</span>
+                </div>
+                <div>Son mesaj onay paneline aktarılamadı: <em>${lastWebhookStatus.message}</em></div>
+                <div style="margin-top: 6px; font-size: 11px; opacity: 0.9;">Aşağıdaki "Webhook Test Gönder" butonuna tıklayarak bağlantı durumunu kontrol edebilirsiniz.</div>
+              </div>
+              ` : ''}
 
               <div class="btn-group">
                 <a href="/test-webhook?theme=${theme}" class="btn btn-success">
@@ -704,8 +779,9 @@ async function connectToWhatsApp() {
                     timestamp: msg.messageTimestamp,
                   };
 
-                  try {
-                    const response = await axios.post(WEBHOOK_URL, payload, { timeout: 15000 });
+                  const sendRes = await postToWebhook(payload, 2);
+                  if (sendRes.success) {
+                    const response = sendRes.response;
                     lastWebhookStatus = {
                       status: 'BAŞARILI (HTTP ' + response.status + ')',
                       code: response.status,
@@ -713,10 +789,11 @@ async function connectToWhatsApp() {
                       time: new Date()
                     };
                     console.log('➡️ Webhook Response:', response.data);
-                  } catch (postErr) {
+                  } else {
+                    const postErr = sendRes.error;
                     lastWebhookStatus = {
                       status: 'İLETİM HATASI',
-                      code: postErr.response?.status || 'AĞ_HATASI',
+                      code: postErr.response?.status || postErr.code || 'AĞ_HATASI',
                       message: postErr.message,
                       time: new Date()
                     };
