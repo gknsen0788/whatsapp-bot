@@ -838,6 +838,49 @@ async function connectToWhatsApp() {
       }
     });
 
+    // Listen to WhatsApp Group Metadata / Subject Updates (Group Rename Event)
+    sock.ev.on('groups.update', async (groupUpdates) => {
+      try {
+        lastActivityAt = new Date();
+        for (const update of groupUpdates) {
+          if (update.subject && update.id?.endsWith('@g.us')) {
+            const groupId = update.id;
+            const newSubject = update.subject;
+            console.log(`\n📢 [GROUP RENAME via groups.update] ${groupId} -> "${newSubject}"`);
+
+            const payload = {
+              eventType: 'GROUP_RENAME',
+              isGroupRename: true,
+              groupId: groupId,
+              groupName: newSubject,
+              senderId: update.author || 'whatsapp-system',
+              senderName: 'Grup Yöneticisi',
+              messageId: 'RENAME_' + Date.now(),
+              messageText: `WhatsApp grup adı "${newSubject}" olarak güncellendi.`,
+              quotedText: '',
+              quotedStanzaId: null,
+              timestamp: Math.floor(Date.now() / 1000)
+            };
+
+            lastMessageInfo = {
+              group: newSubject,
+              sender: 'Grup Yöneticisi',
+              text: `[Grup Adı Değişti] Yeni Ad: "${newSubject}"`,
+              time: new Date()
+            };
+            totalProcessedMessages++;
+
+            const sendRes = await postToWebhook(payload, 2);
+            if (sendRes.success) {
+              console.log('✅ Group rename notification sent to webhook!');
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error in groups.update handler:', err.message);
+      }
+    });
+
     sock.ev.on('messages.upsert', async (m) => {
       try {
         lastActivityAt = new Date();
@@ -850,10 +893,22 @@ async function connectToWhatsApp() {
               const senderName = msg.pushName || (msg.key.fromMe ? 'Ev Sahibi / Siz' : senderId.split('@')[0]);
               
               const messageObj = msg.message;
-              const text = messageObj?.conversation 
+              let text = messageObj?.conversation 
                 || messageObj?.extendedTextMessage?.text 
                 || messageObj?.imageMessage?.caption 
                 || '';
+
+              // Detect WhatsApp System Stub message for group name change (stubType 21)
+              let isStubRename = false;
+              let stubSubject = '';
+              if (msg.messageStubType === 21 || (Array.isArray(msg.messageStubParameters) && msg.messageStubParameters.length > 0 && String(msg.messageStubType).includes('GROUP_CHANGE_SUBJECT'))) {
+                isStubRename = true;
+                stubSubject = msg.messageStubParameters[0] || '';
+              }
+
+              if (isStubRename && stubSubject) {
+                text = `WhatsApp grup adı "${stubSubject}" olarak güncellendi.`;
+              }
 
               const contextInfo = messageObj?.extendedTextMessage?.contextInfo 
                 || messageObj?.imageMessage?.contextInfo
@@ -883,9 +938,11 @@ async function connectToWhatsApp() {
                   };
                   totalProcessedMessages++;
 
+                  const resolvedGroupName = (isStubRename && stubSubject) ? stubSubject : groupName;
+
                   const payload = {
                     groupId,
-                    groupName,
+                    groupName: resolvedGroupName,
                     senderId,
                     senderName,
                     messageId: msg.key.id,
@@ -893,6 +950,7 @@ async function connectToWhatsApp() {
                     quotedText: quotedText,
                     quotedStanzaId: quotedStanzaId,
                     timestamp: msg.messageTimestamp,
+                    ...(isStubRename ? { eventType: 'GROUP_RENAME', isGroupRename: true } : {})
                   };
 
                   const sendRes = await postToWebhook(payload, 2);
