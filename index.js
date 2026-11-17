@@ -29,6 +29,7 @@ import axios from 'axios';
 import https from 'https';
 import http from 'http';
 import net from 'net';
+import tls from 'tls';
 import dns from 'dns';
 import fs from 'fs';
 import pino from 'pino';
@@ -300,27 +301,71 @@ http.createServer(async (req, res) => {
       results.tcpTakvimTakip80 = await testTcp('takvimtakip.com.tr', 80, 4000);
       results.tcpDirectIp443 = await testTcp('94.73.151.44', 443, 4000);
 
-      // Test HTTP GET /wp/
-      try {
-        const tGetStart = Date.now();
-        const getRes = await webhookClient.get('https://takvimtakip.com.tr/wp/', { timeout: 8000 });
-        results.httpGetWp = { status: getRes.status, latencyMs: Date.now() - tGetStart };
-      } catch (e) {
-        results.httpGetWpError = { message: e.message, code: e.code, status: e.response?.status };
-      }
+      // Helper to test TLS handshake
+      const testTls = (host, port, timeout = 4000) => new Promise((resolve) => {
+        const start = Date.now();
+        const socket = tls.connect({
+          host,
+          port,
+          servername: host,
+          rejectUnauthorized: false,
+          timeout
+        }, () => {
+          const latency = Date.now() - start;
+          const alpn = socket.alpnProtocol;
+          socket.destroy();
+          resolve({ status: 'TLS_CONNECTED', latencyMs: latency, alpn });
+        });
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve({ status: 'TIMEOUT', error: 'TLS Handshake Timed Out' });
+        });
+        socket.on('error', (err) => {
+          socket.destroy();
+          resolve({ status: 'ERROR', error: err.message, code: err.code });
+        });
+      });
 
-      // Test HTTP POST /wp/api/webhook.php with ignored group (should return immediately)
-      try {
-        const tPostStart = Date.now();
-        const postRes = await webhookClient.post('https://takvimtakip.com.tr/wp/api/webhook.php', {
-          groupName: 'SESSİZ_TEST_GRUBU',
-          groupId: 'ignored_test_group',
-          messageText: 'merhaba test'
-        }, { timeout: 10000 });
-        results.httpPostWebhook = { status: postRes.status, data: postRes.data, latencyMs: Date.now() - tPostStart };
-      } catch (e) {
-        results.httpPostWebhookError = { message: e.message, code: e.code, status: e.response?.status };
-      }
+      results.tlsTakvimTakip443 = await testTls('takvimtakip.com.tr', 443, 4000);
+
+      // Helper for native HTTP/1.1 request
+      const testNativeHttp = (urlStr, method = 'GET', postData = null, timeout = 4000) => new Promise((resolve) => {
+        const urlObj = new URL(urlStr);
+        const isHttps = urlObj.protocol === 'https:';
+        const client = isHttps ? https : http;
+        const start = Date.now();
+
+        const req = client.request(urlObj, {
+          method,
+          timeout,
+          headers: {
+            'Host': urlObj.host,
+            'User-Agent': 'curl/8.4.0',
+            'Accept': '*/*',
+            ...(postData ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) } : {})
+          }
+        }, (res) => {
+          let body = '';
+          res.on('data', chunk => body += chunk);
+          res.on('end', () => {
+            resolve({ status: res.statusCode, latencyMs: Date.now() - start, headers: res.headers, bodySnippet: body.substring(0, 100) });
+          });
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          resolve({ status: 'TIMEOUT', error: 'HTTP Request Timed Out' });
+        });
+        req.on('error', (err) => {
+          resolve({ status: 'ERROR', error: err.message, code: err.code });
+        });
+
+        if (postData) req.write(postData);
+        req.end();
+      });
+
+      results.nativeHttpPort80 = await testNativeHttp('http://takvimtakip.com.tr/wp/api/webhook.php', 'GET', null, 4000);
+      results.nativeHttpsCurlUa = await testNativeHttp('https://takvimtakip.com.tr/wp/api/webhook.php', 'HEAD', null, 4000);
 
       return res.end(JSON.stringify(results, null, 2));
     }
