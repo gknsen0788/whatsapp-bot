@@ -300,6 +300,28 @@ http.createServer(async (req, res) => {
       results.tcpTakvimTakip80 = await testTcp('takvimtakip.com.tr', 80, 4000);
       results.tcpDirectIp443 = await testTcp('94.73.151.44', 443, 4000);
 
+      // Test HTTP GET /wp/
+      try {
+        const tGetStart = Date.now();
+        const getRes = await webhookClient.get('https://takvimtakip.com.tr/wp/', { timeout: 8000 });
+        results.httpGetWp = { status: getRes.status, latencyMs: Date.now() - tGetStart };
+      } catch (e) {
+        results.httpGetWpError = { message: e.message, code: e.code, status: e.response?.status };
+      }
+
+      // Test HTTP POST /wp/api/webhook.php with ignored group (should return immediately)
+      try {
+        const tPostStart = Date.now();
+        const postRes = await webhookClient.post('https://takvimtakip.com.tr/wp/api/webhook.php', {
+          groupName: 'SESSİZ_TEST_GRUBU',
+          groupId: 'ignored_test_group',
+          messageText: 'merhaba test'
+        }, { timeout: 10000 });
+        results.httpPostWebhook = { status: postRes.status, data: postRes.data, latencyMs: Date.now() - tPostStart };
+      } catch (e) {
+        results.httpPostWebhookError = { message: e.message, code: e.code, status: e.response?.status };
+      }
+
       return res.end(JSON.stringify(results, null, 2));
     }
 
