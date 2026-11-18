@@ -301,8 +301,8 @@ http.createServer(async (req, res) => {
       results.tcpTakvimTakip80 = await testTcp('takvimtakip.com.tr', 80, 4000);
       results.tcpDirectIp443 = await testTcp('94.73.151.44', 443, 4000);
 
-      // Helper to test TLS handshake
-      const testTls = (host, port, timeout = 4000) => new Promise((resolve) => {
+      // Helper to test TLS handshake with 15s timeout
+      const testTls = (host, port, timeout = 15000) => new Promise((resolve) => {
         const start = Date.now();
         const socket = tls.connect({
           host,
@@ -313,12 +313,13 @@ http.createServer(async (req, res) => {
         }, () => {
           const latency = Date.now() - start;
           const alpn = socket.alpnProtocol;
+          const cipher = socket.getCipher();
           socket.destroy();
-          resolve({ status: 'TLS_CONNECTED', latencyMs: latency, alpn });
+          resolve({ status: 'TLS_CONNECTED', latencyMs: latency, alpn, cipher });
         });
         socket.on('timeout', () => {
           socket.destroy();
-          resolve({ status: 'TIMEOUT', error: 'TLS Handshake Timed Out' });
+          resolve({ status: 'TIMEOUT', error: 'TLS Handshake Timed Out after ' + timeout + 'ms' });
         });
         socket.on('error', (err) => {
           socket.destroy();
@@ -326,46 +327,46 @@ http.createServer(async (req, res) => {
         });
       });
 
-      results.tlsTakvimTakip443 = await testTls('takvimtakip.com.tr', 443, 4000);
+      results.tlsTakvimTakip443 = await testTls('takvimtakip.com.tr', 443, 15000);
+      results.tlsWwwTakvimTakip443 = await testTls('www.takvimtakip.com.tr', 443, 15000);
 
-      // Helper for native HTTP/1.1 request
-      const testNativeHttp = (urlStr, method = 'GET', postData = null, timeout = 4000) => new Promise((resolve) => {
-        const urlObj = new URL(urlStr);
-        const isHttps = urlObj.protocol === 'https:';
-        const client = isHttps ? https : http;
-        const start = Date.now();
-
-        const req = client.request(urlObj, {
-          method,
-          timeout,
-          headers: {
-            'Host': urlObj.host,
-            'User-Agent': 'curl/8.4.0',
-            'Accept': '*/*',
-            ...(postData ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) } : {})
-          }
-        }, (res) => {
-          let body = '';
-          res.on('data', chunk => body += chunk);
-          res.on('end', () => {
-            resolve({ status: res.statusCode, latencyMs: Date.now() - start, headers: res.headers, bodySnippet: body.substring(0, 100) });
-          });
+      // Test with Native global fetch (Node 20 native undici engine)
+      try {
+        const fetchStart = Date.now();
+        const fRes = await fetch('https://takvimtakip.com.tr/wp/api/webhook.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify({ messageText: 'ping test', groupName: 'ping' }),
+          signal: AbortSignal.timeout(15000)
         });
+        const fData = await fRes.text();
+        results.nativeFetch = { status: fRes.status, latencyMs: Date.now() - fetchStart, bodySnippet: fData.substring(0, 150) };
+      } catch (e) {
+        results.nativeFetchError = { message: e.message, name: e.name, cause: e.cause?.message || e.cause };
+      }
 
-        req.on('timeout', () => {
-          req.destroy();
-          resolve({ status: 'TIMEOUT', error: 'HTTP Request Timed Out' });
+      // Test with Native global fetch to www
+      try {
+        const fetchWwwStart = Date.now();
+        const fWwwRes = await fetch('https://www.takvimtakip.com.tr/wp/api/webhook.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify({ messageText: 'ping test', groupName: 'ping' }),
+          signal: AbortSignal.timeout(15000)
         });
-        req.on('error', (err) => {
-          resolve({ status: 'ERROR', error: err.message, code: err.code });
-        });
+        const fWwwData = await fWwwRes.text();
+        results.nativeFetchWww = { status: fWwwRes.status, latencyMs: Date.now() - fetchWwwStart, bodySnippet: fWwwData.substring(0, 150) };
+      } catch (e) {
+        results.nativeFetchWwwError = { message: e.message, name: e.name, cause: e.cause?.message || e.cause };
+      }
 
-        if (postData) req.write(postData);
-        req.end();
-      });
-
-      results.nativeHttpPort80 = await testNativeHttp('http://takvimtakip.com.tr/wp/api/webhook.php', 'GET', null, 4000);
-      results.nativeHttpsCurlUa = await testNativeHttp('https://takvimtakip.com.tr/wp/api/webhook.php', 'HEAD', null, 4000);
+      // Test with free Cloudflare or IP check
+      try {
+        const extCheck = await fetch('https://httpbin.org/get', { signal: AbortSignal.timeout(6000) });
+        results.httpBinCheck = { status: extCheck.status };
+      } catch (e) {
+        results.httpBinCheckError = e.message;
+      }
 
       return res.end(JSON.stringify(results, null, 2));
     }
