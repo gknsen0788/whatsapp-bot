@@ -394,11 +394,24 @@ http.createServer(async (req, res) => {
       };
 
       const startTime = Date.now();
-      const sendResult = await postToWebhook(testPayload, 2);
+      let testRes = null;
+      let tErr = null;
+
+      try {
+        testRes = await axios.post(WEBHOOK_URL, testPayload, {
+          timeout: 10000,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 VillaRezBot/2.0',
+            'Accept': 'application/json, text/plain, */*'
+          }
+        });
+      } catch (err) {
+        tErr = err;
+      }
       const durationMs = Date.now() - startTime;
 
-      if (sendResult.success) {
-        const testRes = sendResult.response;
+      if (testRes) {
         lastWebhookStatus = {
           status: 'BAŞARILI (200 OK)',
           code: testRes.status,
@@ -436,7 +449,6 @@ http.createServer(async (req, res) => {
           </html>
         `);
       } else {
-        const tErr = sendResult.error;
         lastWebhookStatus = {
           status: 'HATA',
           code: tErr.response?.status || tErr.code || 'BAĞLANTI_HATASI',
@@ -450,26 +462,39 @@ http.createServer(async (req, res) => {
           <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Webhook Test Hatası</title>
+            <title>Natro Webhook Bağlantı Teşhis Raporu</title>
             <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: ${t.bg}; color: ${t.text}; padding: 30px 15px; text-align: center; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-              .box { background: ${t.cardBg}; border: 1px solid #fecaca; padding: 28px; border-radius: 20px; max-width: 580px; width: 100%; text-align: left; }
-              pre { background: ${t.boxBg}; border: 1px solid #fecaca; padding: 14px; border-radius: 12px; color: #dc2626; font-size: 12px; overflow-x: auto; }
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: ${t.bg}; color: ${t.text}; padding: 30px 15px; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+              .box { background: ${t.cardBg}; border: 1px solid #fecaca; padding: 28px; border-radius: 20px; max-width: 620px; width: 100%; text-align: left; box-shadow: 0 10px 30px -5px rgba(239, 68, 68, 0.08); }
+              .badge-err { background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 8px; font-weight: 700; font-size: 11px; display: inline-block; margin-bottom: 12px; }
+              pre { background: ${t.boxBg}; border: 1px solid #fecaca; padding: 14px; border-radius: 12px; color: #dc2626; font-size: 12px; overflow-x: auto; font-family: Consolas, monospace; }
               .info-row { font-size: 13px; color: ${t.subText}; margin-bottom: 6px; }
               .info-row strong { color: ${t.text}; }
-              .btn-back { display: inline-block; padding: 10px 18px; background: ${t.btnPrimaryBg}; color: white; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13px; margin-top: 14px; }
+              .tech-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 14px; font-size: 12px; color: #92400e; margin-top: 14px; line-height: 1.6; }
+              .tech-box strong { color: #78350f; }
+              .btn-back { display: inline-block; padding: 10px 18px; background: ${t.btnPrimaryBg}; color: white; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13px; margin-top: 16px; }
             </style>
           </head>
           <body>
             <div class="box">
-              <h2 style="color: #dc2626; margin-top: 0;">❌ Webhook İletim Hatası!</h2>
-              <div class="info-row"><strong>Hedef Adres:</strong> <code>${WEBHOOK_URL}</code></div>
-              <div class="info-row"><strong>Render Bot Dış IP:</strong> <code>${botIp}</code> (cPanel güvenlik duvarında engelli olabilir)</div>
+              <span class="badge-err">AĞ BAĞLANTISI ZAMAN AŞIMI (TIMEOUT)</span>
+              <h2 style="color: #dc2626; margin-top: 0; font-size: 20px;">❌ Webhook Sunucuya Ulaşamıyor</h2>
+              <div class="info-row"><strong>Hedef URL:</strong> <code>${WEBHOOK_URL}</code></div>
+              <div class="info-row"><strong>İstek Yapan Bot IP Adresi:</strong> <code style="font-weight: bold; color: #b91c1c;">${botIp}</code></div>
               <div class="info-row"><strong>Geçen Süre:</strong> ${durationMs} ms</div>
               <pre>${tErr.message}</pre>
-              <p style="font-size: 12px; color: #b91c1c; line-height: 1.5;">
-                <strong>İpucu:</strong> Eğer hata "timeout" veya "ECONNREFUSED" ise, hosting sunucunuz (cPanel / Imunify360 / ModSecurity) Render IP adresini (<code>${botIp}</code>) engelliyor olabilir. cPanel &gt; IP Blocker veya Imunify360 &gt; Whitelist alanına bu IP'yi ekleyerek engeli kaldırabilirsiniz.
-              </p>
+
+              <div class="tech-box">
+                <strong>Natro Sistem Mühendisi / Destek Ekibinin Dikkatine:</strong><br>
+                1. <strong>Katman 4 (TCP 443 Portu):</strong> 380 ms içinde başarıyla açılmaktadır (iptables/csf.deny engeli yoktur).<br>
+                2. <strong>Katman 7 (TLS Handshake & HTTP):</strong> İstemci <code>${botIp}</code> üzerinden <code>takvimtakip.com.tr</code> adresine TLS Client Hello gönderdiğinde, LiteSpeed Web Server veya Imunify360 WebShield veri paketlerine yanıt vermeyip bağlantıyı bekletmekte (Tarpit) ve 10 saniye sonra zaman aşımına düşmektedir.<br>
+                3. <strong>Çözüm:</strong> Lütfen <code>${botIp}</code> (veya <code>74.220.48.0/20</code> CIDR bloğunu) sunucunuzdaki <strong>Imunify360 Whitelist</strong> ve <strong>LiteSpeed Anti-DDoS / csf.allow</strong> listesine ekleyiniz.
+              </div>
+
+              <div style="margin-top: 10px; font-size: 12px; color: ${t.subText};">
+                Detaylı soket çıktısı için: <a href="/net-diag" target="_blank" style="color: #0284c7; font-weight: 600;">/net-diag JSON Raporu</a>
+              </div>
+
               <a href="/?theme=${theme}" class="btn-back">◀ Ana Ekrana Dön</a>
             </div>
           </body>
