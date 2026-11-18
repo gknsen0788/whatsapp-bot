@@ -34,10 +34,11 @@ import dns from 'dns';
 import fs from 'fs';
 import pino from 'pino';
 
-// Smart Webhook URL resolution: If env has template or localhost, fallback to real live cPanel endpoint
-let resolvedWebhookUrl = process.env.WEBHOOK_URL || 'https://takvimtakip.com.tr/wp/api/webhook.php';
-if (!resolvedWebhookUrl || resolvedWebhookUrl.includes('localhost') || resolvedWebhookUrl.includes('siteniz.com') || resolvedWebhookUrl.includes('127.0.0.1')) {
-  resolvedWebhookUrl = 'https://takvimtakip.com.tr/wp/api/webhook.php';
+// Smart Webhook URL resolution: Route via permanent Cloudflare Relay to completely bypass hosting firewalls
+const DEFAULT_WEBHOOK_URL = 'https://takvim-relay.gokhansen0788.workers.dev/wp/api/webhook.php';
+let resolvedWebhookUrl = process.env.WEBHOOK_URL;
+if (!resolvedWebhookUrl || resolvedWebhookUrl.includes('localhost') || resolvedWebhookUrl.includes('siteniz.com') || resolvedWebhookUrl.includes('127.0.0.1') || resolvedWebhookUrl === 'https://takvimtakip.com.tr/wp/api/webhook.php') {
+  resolvedWebhookUrl = DEFAULT_WEBHOOK_URL;
 }
 const WEBHOOK_URL = resolvedWebhookUrl;
 const PORT = process.env.PORT || 3000;
